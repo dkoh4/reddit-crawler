@@ -5,7 +5,6 @@ from bs4 import BeautifulSoup
 import os
 import time
 
-
 SEED_URL = 'https://www.reddit.com/best/communities'
 DB_PATH = './db/database.db'
 MIN_SUBSCRIBER_COUNT = 20000
@@ -42,6 +41,7 @@ def scrape_community_index():
                 status['message'] = f'Failed to scrape page {page} after {MAX_RETRIES} retries. Error: {result["message"]}'
                 break
             time.sleep(1)
+            print(f'Retry {retries} of {MAX_RETRIES} for {url} with error: {result["message"]}')
         else:
             if result['message'] == 'COMPLETED':
                 status['message'] = 'Scraping completed successfully'
@@ -90,7 +90,7 @@ def update_database_status(status):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
 
-    cursor.execute('''update state set value = ? where name = 'Last Status' ''', (status['message'],))
+    cursor.execute('''update state set value = ? where name = 'last_status' ''', (status['message'],))
     conn.commit()
     conn.close()
 
@@ -109,10 +109,14 @@ def update_database_communities(communities):
             if subscriber_count < MIN_SUBSCRIBER_COUNT:
                 status['message'] = 'COMPLETED'
                 break
-            cursor.execute('''insert into communities (name, subscriber_count) values (?, ?)''', (name, subscriber_count))
-        cursor.execute('''update state set value = value + 1 where name = 'Page' ''')
+            cursor.execute('''
+                insert into communities (name, subscriber_count, last_updated)
+                VALUES (?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(name) DO UPDATE 
+                SET subscriber_count = excluded.subscriber_count, last_updated = CURRENT_TIMESTAMP
+            ''', (name, subscriber_count))
+        cursor.execute('''update state set value = value + 1 where name = 'page' ''')
         conn.commit()
-
         conn.close()
     except Exception as e:
         status['message'] = f'Error updating database: {str(e)}'
@@ -126,18 +130,22 @@ def get_page_index():
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
 
-    cursor.execute('''select value from state where name = 'Retry' ''')
+    cursor.execute('''select value from state where name = 'retry' ''')
     retry = cursor.fetchone()[0]
     if retry == 'True':
-        cursor.execute('''insert into value (name, state) values ('Page', 1)''')
-        return 1
-
-    cursor.execute('''select value from state where name = 'Last Status' ''')
-    if cursor.fetchone()[0] == 'Scraping completed successfully':
-        return 0
-    
-    cursor.execute('''select value from state where name = 'Page' ''')
-    return cursor.fetchone()[0]
+        cursor.execute('''insert into value (name, state) values ('page', 1)''')
+        cursor.execute('''insert into value (name, state) values ('retry', False)''')
+        conn.commit()
+        page_index = 1
+    else:
+        cursor.execute('''select value from state where name = 'last_status' ''')
+        if cursor.fetchone()[0] == 'Scraping completed successfully':
+            page_index = 0
+        else:
+            cursor.execute('''select value from state where name = 'page' ''')
+            page_index = cursor.fetchone()[0]
+    conn.close()
+    return page_index
 
 
 def initialize_database():
@@ -150,14 +158,20 @@ def initialize_database():
             value NOT NULL
         )
     ''')
-    cursor.execute('''insert into state (name, value) values ('Page', 1)''')
-    cursor.execute('''insert into state (name, value) values ('Retry', 'False')''')
-    cursor.execute('''insert into state (name, value) values ('Last Status', 'Initialized Database')''')
+    data = [
+        ('page', 1),
+        ('retry', 'False'),
+        ('last_status', 'Initialized Database')
+    ]
+
+    cursor.executemany('''INSERT INTO state (name, value) VALUES (?, ?)''', data)
+    cursor.execute('''insert into state (name, value) values ('last_run', CURRENT_TIMESTAMP)''')
 
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS communities (
             name TEXT PRIMARY KEY,
-            subscriber_count INTEGER NOT NULL
+            subscriber_count INTEGER NOT NULL,
+            last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
 
