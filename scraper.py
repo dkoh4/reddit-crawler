@@ -5,22 +5,25 @@ from bs4 import BeautifulSoup
 import os
 import time
 
+
 SEED_URL = 'https://www.reddit.com/best/communities'
 DB_PATH = './db/database.db'
 MIN_SUBSCRIBER_COUNT = 20000
 MAX_RETRIES = 3
 
+
 def main():
     if not os.path.exists(DB_PATH):
         initialize_database()
     
-    result = scrape_best_communities()
+    result = scrape_community_index()
     update_database_status(result)
     print(result['message'])
 
-def scrape_best_communities():
+
+def scrape_community_index():
     status = {'status': 'error', 'message': ''}
-    page = get_current_page()
+    page = get_page_index()
     if page == 0:
         status['status'] = 'success'
         status['message'] = 'Scraping completed successfully'
@@ -31,7 +34,7 @@ def scrape_best_communities():
 
     while True:
         print(f'Scraping {url}')
-        result = scrape_communities_page(url)
+        result = process_url(url)
 
         if result['status'] == 'error':
             retries += 1
@@ -43,13 +46,13 @@ def scrape_best_communities():
             if result['message'] == 'COMPLETED':
                 status['message'] = 'Scraping completed successfully'
                 break
-            page = get_current_page()
+            page = get_page_index()
             url = f'{SEED_URL}/{page}'
             retries = 0
     return status
 
 
-def scrape_communities_page(url):
+def process_url(url):
     status = {'status': 'error', 'message': ''}
 
     try:
@@ -119,7 +122,7 @@ def update_database_communities(communities):
     return status
 
 
-def get_current_page():
+def get_page_index():
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
 
